@@ -38,9 +38,9 @@ jobs:
     # main branch → environment: prod (requires manual approval)
     environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
 
-      outputs:
-        image_tag: ${{ steps.meta.outputs.image_tag }}
-        target_env: ${{ steps.meta.outputs.target_env }}
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      target_env: ${{ steps.meta.outputs.target_env }}  
 
     steps:
 
