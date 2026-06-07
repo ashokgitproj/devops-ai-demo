@@ -1,0 +1,166 @@
+name: CI/CD Pipeline
+
+# ── Triggers ──────────────────────────────────────────────────
+# This pipeline runs on every push to dev or main branch.
+# The branch name determines which environment gets deployed.
+on:
+  push:
+    branches:
+      - dev
+      - main
+    paths-ignore:
+      - 'helm/values-*.yaml'  # prevent loop when pipeline updates values files
+
+# ── Permissions ───────────────────────────────────────────────
+# id-token: write  → allows GitHub to generate OIDC token for Azure login
+# contents: write  → allows pipeline to commit values file changes back to repo
+permissions:
+  id-token: write
+  contents: write
+
+# ── Global environment variables ──────────────────────────────
+env:
+  ACR_NAME: acrdevopsai2834.azurecr.io
+  IMAGE_NAME: game-2048
+  HELM_VALUES_PATH: helm
+
+jobs:
+
+  # ────────────────────────────────────────────────────────────
+  # JOB 1 — Build, scan and push image to ACR
+  # ────────────────────────────────────────────────────────────
+  build-and-push:
+    name: Build → Scan → Push
+    runs-on: ubuntu-latest
+
+    # Determine target environment from branch name.
+    # dev branch  → environment: dev  (no approval gate)
+    # main branch → environment: prod (requires manual approval)
+    environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+
+      outputs:
+        image_tag: ${{ steps.meta.outputs.image_tag }}
+        target_env: ${{ steps.meta.outputs.target_env }}
+
+    steps:
+
+      # Step 1 — Checkout the repository code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2 — Build image tag and determine target environment.
+      # Tag format: <branch>-<short-sha>  e.g. dev-a1b2c3d
+      # This tag is unique per commit and tells you exactly
+      # which branch and commit is running in any environment.
+      - name: Set image tag and target environment
+        id: meta
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          BRANCH=${{ github.ref_name }}
+          IMAGE_TAG="${BRANCH}-${SHORT_SHA}"
+
+          # Route environment based on branch name
+          if [ "$BRANCH" = "main" ]; then
+            TARGET_ENV="prod"
+          else
+            TARGET_ENV="dev"
+          fi
+
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "target_env=${TARGET_ENV}" >> $GITHUB_OUTPUT
+
+          echo "Image tag : ${IMAGE_TAG}"
+          echo "Target env: ${TARGET_ENV}"
+
+      # Step 3 — Login to Azure using OIDC (no passwords stored anywhere).
+      # The federated credential we created in Phase 0 allows this.
+      # GitHub generates a short-lived OIDC token; Azure validates it.
+      - name: Login to Azure via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Step 4 — Login to ACR using the Azure CLI token from step 3.
+      # No ACR username/password needed — the managed identity has AcrPush.
+      - name: Login to ACR
+        run: az acr login --name acrdevopsai2834
+
+      # Step 5 — Build the Docker image.
+      # We tag it with both the unique tag AND latest for convenience.
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ env.ACR_NAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }} \
+            -t ${{ env.ACR_NAME }}/${{ env.IMAGE_NAME }}:latest \
+            .
+
+      # Step 6 — Run Trivy security scan on the built image.
+      # CRITICAL severity issues will FAIL the pipeline (exit-code: '1').
+      # The image is NOT pushed if this step fails.
+      # This is the security gate — nothing broken reaches ACR.
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.ACR_NAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL
+
+      # Step 7 — Push image to ACR only if Trivy scan passed.
+      - name: Push image to ACR
+        run: |
+          docker push ${{ env.ACR_NAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }}
+          docker push ${{ env.ACR_NAME }}/${{ env.IMAGE_NAME }}:latest
+
+  # ────────────────────────────────────────────────────────────
+  # JOB 2 — Update Helm values file with new image tag
+  # This is the GitOps step. The pipeline does NOT deploy directly.
+  # It commits a values file change to Git.
+  # ArgoCD watches the repo and pulls the change into the cluster.
+  # ────────────────────────────────────────────────────────────
+  update-gitops:
+    name: Update GitOps values
+    runs-on: ubuntu-latest
+    needs: build-and-push   # only runs if Job 1 succeeded
+
+    steps:
+
+      # Step 1 — Checkout repo so we can edit the values file
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Step 2 — Update the correct values file with the new image tag.
+      # sed finds the line starting with "  tag:" and replaces the value.
+      # This is what ArgoCD will detect as a change.
+      - name: Update Helm values with new image tag
+        run: |
+          TARGET_ENV=${{ needs.build-and-push.outputs.target_env }}
+          IMAGE_TAG=${{ needs.build-and-push.outputs.image_tag }}
+          VALUES_FILE="${{ env.HELM_VALUES_PATH }}/values-${TARGET_ENV}.yaml"
+
+          echo "Updating ${VALUES_FILE} with tag: ${IMAGE_TAG}"
+
+          # Replace the tag line in the correct values file
+          sed -i "s|^  tag:.*|  tag: \"${IMAGE_TAG}\"|" ${VALUES_FILE}
+
+          echo "Updated content:"
+          cat ${VALUES_FILE}
+
+      # Step 3 — Commit and push the values file change back to the repo.
+      # ArgoCD will detect this commit within ~3 minutes and reconcile.
+      - name: Commit and push values update
+        run: |
+          TARGET_ENV=${{ needs.build-and-push.outputs.target_env }}
+          IMAGE_TAG=${{ needs.build-and-push.outputs.image_tag }}
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add helm/values-${TARGET_ENV}.yaml
+          git commit -m "ci: update ${TARGET_ENV} image tag to ${IMAGE_TAG} [skip ci]"
+          git push
