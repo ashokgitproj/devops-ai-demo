@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2048 — DevOps AI Demo</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #faf8ef; font-family: 'Arial', sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; min-height: 100vh; }
+  h1 { font-size: 48px; font-weight: bold; color: #776e65; margin-bottom: 8px; }
+  .subtitle { font-size: 13px; color: #776e65; margin-bottom: 20px; background: #eee4da; padding: 6px 14px; border-radius: 6px; }
+  .header { display: flex; justify-content: space-between; align-items: center; width: 100%; max-width: 500px; margin-bottom: 16px; }
+  .score-box { background: #bbada0; border-radius: 6px; padding: 8px 16px; text-align: center; }
+  .score-label { font-size: 11px; color: #eee4da; text-transform: uppercase; font-weight: bold; }
+  .score-value { font-size: 22px; font-weight: bold; color: white; }
+  .btn { background: #8f7a66; color: white; border: none; border-radius: 6px; padding: 10px 20px; font-size: 14px; font-weight: bold; cursor: pointer; }
+  .btn:hover { background: #776e65; }
+  .grid-container { background: #bbada0; border-radius: 10px; padding: 12px; width: 100%; max-width: 500px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .cell { background: #cdc1b4; border-radius: 6px; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: bold; transition: all 0.1s; }
+  .cell[data-val="2"]    { background:#eee4da; color:#776e65; }
+  .cell[data-val="4"]    { background:#ede0c8; color:#776e65; }
+  .cell[data-val="8"]    { background:#f2b179; color:#f9f6f2; }
+  .cell[data-val="16"]   { background:#f59563; color:#f9f6f2; }
+  .cell[data-val="32"]   { background:#f67c5f; color:#f9f6f2; }
+  .cell[data-val="64"]   { background:#f65e3b; color:#f9f6f2; }
+  .cell[data-val="128"]  { background:#edcf72; color:#f9f6f2; font-size:22px; }
+  .cell[data-val="256"]  { background:#edcc61; color:#f9f6f2; font-size:22px; }
+  .cell[data-val="512"]  { background:#edc850; color:#f9f6f2; font-size:22px; }
+  .cell[data-val="1024"] { background:#edc53f; color:#f9f6f2; font-size:18px; }
+  .cell[data-val="2048"] { background:#edc22e; color:#f9f6f2; font-size:18px; }
+  .msg { margin-top: 16px; font-size: 16px; color: #776e65; font-weight: bold; height: 24px; }
+  .env-badge { margin-top: 12px; font-size: 11px; color: #aaa; }
+</style>
+</head>
+<body>
+<h1>2048</h1>
+<div class="subtitle">🚀 Running on DevOps AI Demo Project</div>
+<div class="header" style="max-width:500px;width:100%">
+  <div style="display:flex;gap:10px">
+    <div class="score-box"><div class="score-label">Score</div><div class="score-value" id="score">0</div></div>
+    <div class="score-box"><div class="score-label">Best</div><div class="score-value" id="best">0</div></div>
+  </div>
+  <button class="btn" onclick="initGame()">New Game</button>
+</div>
+<div class="grid-container"><div class="grid" id="grid"></div></div>
+<div class="msg" id="msg"></div>
+<div class="env-badge" id="env-badge">loading environment info...</div>
+
+<script>
+let board, score, best = 0;
+
+function initGame() {
+  board = Array(4).fill(null).map(() => Array(4).fill(0));
+  score = 0;
+  document.getElementById('msg').textContent = '';
+  addTile(); addTile(); render();
+}
+
+function addTile() {
+  let empty = [];
+  board.forEach((r,i) => r.forEach((v,j) => { if(!v) empty.push([i,j]); }));
+  if(!empty.length) return;
+  let [r,c] = empty[Math.floor(Math.random()*empty.length)];
+  board[r][c] = Math.random()<0.9 ? 2 : 4;
+}
+
+function render() {
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  board.forEach(row => row.forEach(val => {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    if(val) { cell.textContent = val; cell.dataset.val = val; }
+    grid.appendChild(cell);
+  }));
+  document.getElementById('score').textContent = score;
+  document.getElementById('best').textContent = best;
+}
+
+function slide(row) {
+  let arr = row.filter(v=>v), gained = 0;
+  for(let i=0;i<arr.length-1;i++) {
+    if(arr[i]===arr[i+1]) { arr[i]*=2; gained+=arr[i]; arr.splice(i+1,1); }
+  }
+  score += gained; if(score>best) best=score;
+  while(arr.length<4) arr.push(0);
+  return arr;
+}
+
+function move(dir) {
+  let moved = false;
+  let b = board.map(r=>[...r]);
+  if(dir==='left')  board = board.map(r=>{ let s=slide(r); if(s.join()!==r.join()) moved=true; return s; });
+  if(dir==='right') board = board.map(r=>{ let rev=slide([...r].reverse()).reverse(); if(rev.join()!==r.join()) moved=true; return rev; });
+  if(dir==='up'||dir==='down') {
+    for(let c=0;c<4;c++) {
+      let col = board.map(r=>r[c]);
+      let slid = dir==='up' ? slide(col) : slide([...col].reverse()).reverse();
+      if(slid.join()!==col.join()) moved=true;
+      slid.forEach((v,r)=>board[r][c]=v);
+    }
+  }
+  if(moved) { addTile(); render(); checkEnd(); }
+}
+
+function checkEnd() {
+  if(board.flat().includes(2048)) { document.getElementById('msg').textContent='🎉 You reached 2048!'; return; }
+  for(let r=0;r<4;r++) for(let c=0;c<4;c++) {
+    if(!board[r][c]) return;
+    if(c<3&&board[r][c]===board[r][c+1]) return;
+    if(r<3&&board[r][c]===board[r+1][c]) return;
+  }
+  document.getElementById('msg').textContent='Game over! Try again.';
+}
+
+document.addEventListener('keydown', e => {
+  const map = {ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up',ArrowDown:'down'};
+  if(map[e.key]) { e.preventDefault(); move(map[e.key]); }
+});
+
+// Load env info from /info endpoint
+fetch('/info').then(r=>r.json()).then(d=>{
+  document.getElementById('env-badge').textContent =
+    `Environment: ${d.environment} | Version: ${d.version}`;
+}).catch(()=>{
+  document.getElementById('env-badge').textContent = 'Environment: local';
+});
+
+initGame();
+</script>
+</body>
+</html>
