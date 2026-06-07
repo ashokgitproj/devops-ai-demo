@@ -1,0 +1,43 @@
+# ── Environment identity ──────────────────────────────────────
+environment: prod
+replicaCount: 2
+
+# ── Image ─────────────────────────────────────────────────────
+image:
+  repository: acrdevopsai2834.azurecr.io/game-2048
+  tag: "latest"
+  pullPolicy: Always
+
+# ── Service ───────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+# ── Ingress ───────────────────────────────────────────────────
+ingress:
+  enabled: false
+
+# ── Resources ─────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# ── Probes ────────────────────────────────────────────────────
+livenessProbe:
+  path: /health
+  initialDelaySeconds: 10
+  periodSeconds: 15
+
+readinessProbe:
+  path: /ready
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# ── App config ────────────────────────────────────────────────
+appEnv: prod
+appVersion: "1.0.0"
