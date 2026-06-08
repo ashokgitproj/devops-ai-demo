@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 import os
 
-app = FastAPI(title="2048 Game", version="1.0.0")
+app = FastAPI(title="2048 Game", version="1.0.1")
 
 # Serve static files (the game UI)
 app.mount("/static", StaticFiles(directory="static"), name="static")

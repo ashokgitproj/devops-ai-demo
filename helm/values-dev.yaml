@@ -5,7 +5,7 @@ replicaCount: 1
 # ── Image ─────────────────────────────────────────────────────
 image:
   repository: acrdevopsai2834.azurecr.io/game-2048
-  tag: "latest"
+  tag: "dev-d53bfda"
   pullPolicy: Always
 
 # ── Service ───────────────────────────────────────────────────
