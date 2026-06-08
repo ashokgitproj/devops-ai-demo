@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: game-2048-prod
+  namespace: argocd
+  labels:
+    environment: prod
+    app: game-2048
+
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/ashokgitproj/devops-ai-demo.git
+    # Prod watches the main branch
+    targetRevision: main
+    path: helm
+
+    helm:
+      valueFiles:
+        - values-prod.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: game-prod
+
+  syncPolicy:
+    # No automated sync for prod — manual sync only
+    # This means ArgoCD will show OutOfSync but won't act until you tell it to
+    syncOptions:
+      - CreateNamespace=true

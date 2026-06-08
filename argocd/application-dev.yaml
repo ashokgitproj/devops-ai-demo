@@ -1,0 +1,45 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  # Name of this ArgoCD Application object
+  name: game-2048-dev
+  # ArgoCD Application manifests must always live in the argocd namespace
+  namespace: argocd
+  labels:
+    environment: dev
+    app: game-2048
+
+spec:
+  # Which ArgoCD project this belongs to (default = no restrictions)
+  project: default
+
+  source:
+    # Git repo ArgoCD will watch for changes
+    repoURL: https://github.com/ashokgitproj/devops-ai-demo.git
+    # Branch to watch
+    targetRevision: dev
+    # Path inside the repo where the Helm chart lives
+    path: helm
+
+    # Helm-specific configuration
+    helm:
+      # Which values file to use when rendering templates
+      # This is what changes when the pipeline commits a new image tag
+      valueFiles:
+        - values-dev.yaml
+
+  destination:
+    # Deploy to the same cluster ArgoCD is running in
+    server: https://kubernetes.default.svc
+    # Deploy into this namespace
+    namespace: game-dev
+
+  syncPolicy:
+    automated:
+      # Auto-sync when Git changes — no manual trigger needed for dev
+      prune: true      # remove resources deleted from Git
+      selfHeal: true   # re-apply if someone manually changes the cluster
+
+    syncOptions:
+      # Create the namespace if it doesn't exist
+      - CreateNamespace=true
