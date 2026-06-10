@@ -1,0 +1,70 @@
+name: CD — Promote to Prod
+
+# ── Triggers ──────────────────────────────────────────────────
+# Runs ONLY when a PR is merged into main.
+# This is the promotion event — dev has been reviewed and approved.
+# No image is built here. We promote what was tested in dev.
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'helm/values-*.yaml'
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+
+  # ────────────────────────────────────────────────────────────
+  # JOB 1 — Promote the tested dev image tag to prod
+  #
+  # How it works:
+  # 1. Read the current image tag from values-dev.yaml
+  #    (this is the tag that was built, scanned and tested in dev)
+  # 2. Write that exact same tag into values-prod.yaml
+  # 3. ArgoCD detects the change and syncs prod namespace
+  #
+  # The manual approval gate is enforced by the GitHub Environment
+  # protection rule on "prod" — pipeline pauses until you approve.
+  # ────────────────────────────────────────────────────────────
+  promote-to-prod:
+    name: Promote image to prod
+    runs-on: ubuntu-latest
+    environment: prod
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Read the exact tag currently deployed in dev.
+      # This is the image that passed Trivy scan and ran successfully in dev.
+      # We promote this tag — not a new build.
+      - name: Read dev image tag
+        id: read_tag
+        run: |
+          DEV_TAG=$(grep '^\s*tag:' helm/values-dev.yaml \
+            | head -1 | awk '{print $2}' | tr -d '"')
+          echo "Tag to promote: ${DEV_TAG}"
+          echo "image_tag=${DEV_TAG}" >> $GITHUB_OUTPUT
+
+      # Write the same tag to values-prod.yaml.
+      # ArgoCD watches this file and will detect the change.
+      - name: Write tag to values-prod.yaml
+        run: |
+          IMAGE_TAG=${{ steps.read_tag.outputs.image_tag }}
+          sed -i "s|^  tag:.*|  tag: \"${IMAGE_TAG}\"|" helm/values-prod.yaml
+          echo "values-prod.yaml updated with tag: ${IMAGE_TAG}"
+
+      - name: Commit and push
+        run: |
+          IMAGE_TAG=${{ steps.read_tag.outputs.image_tag }}
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add helm/values-prod.yaml
+          git commit -m "cd: promote image tag ${IMAGE_TAG} to prod [skip ci]"
+          git push
