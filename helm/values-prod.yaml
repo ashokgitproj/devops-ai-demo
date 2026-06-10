@@ -5,7 +5,7 @@ replicaCount: 2
 # ── Image ─────────────────────────────────────────────────────
 image:
   repository: acrdevopsai2834.azurecr.io/game-2048
-  tag: "latest"
+  tag: "sha-50e4a33"
   pullPolicy: Always
 
 # ── Service ───────────────────────────────────────────────────
