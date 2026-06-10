@@ -1,0 +1,116 @@
+name: CI — Build, Scan, Push
+
+# ── Triggers ──────────────────────────────────────────────────
+# Runs on every push to dev branch only.
+# Ignores pushes where only values files changed (pipeline bot commits).
+on:
+  push:
+    branches:
+      - dev
+    paths-ignore:
+      - 'helm/values-*.yaml'
+
+permissions:
+  id-token: write
+  contents: write
+
+env:
+  ACR_NAME: acrdevopsai2834.azurecr.io
+  IMAGE_NAME: game-2048
+
+jobs:
+
+  # ────────────────────────────────────────────────────────────
+  # JOB 1 — Build image, scan with Trivy, push to ACR
+  # Runs on dev branch only. Image is built ONCE here.
+  # The same image tag will be promoted to prod later.
+  # ────────────────────────────────────────────────────────────
+  build-and-push:
+    name: Build → Scan → Push
+    runs-on: ubuntu-latest
+    environment: dev
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Tag format: sha-<short_commit_sha>
+      # No branch prefix — same tag is valid in dev and prod.
+      # This is what makes immutable promotion possible.
+      - name: Set image tag
+        id: meta
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          IMAGE_TAG="sha-${SHORT_SHA}"
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "Image tag: ${IMAGE_TAG}"
+
+      # OIDC login — no passwords stored anywhere
+      - name: Login to Azure via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name acrdevopsai2834
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ env.ACR_NAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }} \
+            -t ${{ env.ACR_NAME }}/${{ env.IMAGE_NAME }}:latest \
+            .
+
+      # Security gate — CRITICAL vulnerabilities block the push.
+      # Image never reaches ACR if this step fails.
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.ACR_NAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL
+
+      - name: Push image to ACR
+        run: |
+          docker push ${{ env.ACR_NAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }}
+          docker push ${{ env.ACR_NAME }}/${{ env.IMAGE_NAME }}:latest
+
+  # ────────────────────────────────────────────────────────────
+  # JOB 2 — Update dev values file with new image tag
+  # This is the GitOps commit. Pipeline writes to Git.
+  # ArgoCD detects the change and deploys to game-dev namespace.
+  # ────────────────────────────────────────────────────────────
+  update-dev-values:
+    name: Update dev values
+    runs-on: ubuntu-latest
+    needs: build-and-push
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update values-dev.yaml with new image tag
+        run: |
+          IMAGE_TAG=${{ needs.build-and-push.outputs.image_tag }}
+          sed -i "s|^  tag:.*|  tag: \"${IMAGE_TAG}\"|" helm/values-dev.yaml
+          echo "values-dev.yaml updated with tag: ${IMAGE_TAG}"
+
+      - name: Commit and push
+        run: |
+          IMAGE_TAG=${{ needs.build-and-push.outputs.image_tag }}
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add helm/values-dev.yaml
+          git commit -m "ci: update dev image tag to ${IMAGE_TAG} [skip ci]"
+          git push
